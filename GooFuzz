@@ -5,8 +5,13 @@
 url="https://www.google.com/search?q="
 filter="&filter=0"
 start="&start="
-userAgent="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:101.0) Gecko/20100101 Firefox/101.0"
+# userAgent="User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:101.0) Gecko/20100101 Firefox/101.0"
+userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
 version="1.2.5"
+
+# Cookie generation and inclusion
+python3 GetCookie.py
+cookies=$(awk -F";" '{print $1}' cookies.txt | paste -sd'; ' -)
 
 ## Effects
 cBold="\e[1m"
@@ -76,7 +81,9 @@ function showError(){
 function notFound(){
 	
 	# Checking temporal ban from Google
-	checkBan
+	while ! checkBan; do
+		sleep 10s
+	done
 		
 	if [ -n "$extension" ]; then
 		echo -e "\nSorry, no results found for ${cBold}${extension}${cNormal}."
@@ -109,12 +116,18 @@ function ctrl_c(){
 
 ## Google ban check
 function checkBan(){
-	checkBanStatus=$(curl -s -H "$userAgent" "${url}site:${target}${filter}${start}${pageNum}")
+	checkBanStatus=$(curl -s -H "$userAgent" -H "Cookie: $cookies" "${url}site:${target}${filter}${start}${pageNum}")
 
 	if [[ ${checkBanStatus} =~ "The document has moved" ]]; then
 		echo -e "\n${cBold}[!]${cNormal} Oops... Looks like Google has temporarily blocked your IP address."
-		exit 1
+		echo "python3 ./GoogleRecaptchaBypass/bypass_googleCaptcha.py \"${url}site:${target}${filter}${start}${pageNum}\""
+		python3 ./GoogleRecaptchaBypass/bypass_googleCaptcha.py "${url}site:${target}${filter}${start}${pageNum}" "$userAgent"
+		read -p "Press enter to continue"
+		sleep 5m
+		return 1
 	fi
+	sleep 3s
+	return 0
 }
 
 ## URL Decode
@@ -215,7 +228,7 @@ function delayControl(){
 	if [[ -n "$delay" ]]; then
 		sleep "$delay"s
 	else
-		sleep 0s
+		sleep 1s
 	fi
 }
 
@@ -234,16 +247,17 @@ function requestRun(){
 		let pageNum=$page*10
 
 		if [ -n "$extension" ]; then
-			request=$(curl -s -k -x "$proxy" -H "$userAgent" "${url}site:${target}+filetype:${extension}+${inFile}+${excludeTargets}${filter}${start}${pageNum}" | grep -Eo '(http|https)://[a-zA-Z0-9./?=_%:-]*' | grep -i "${target}" | grep -viE "google" | grep -i "${extension}" | urlDecode | sort -u)
+			request=$(curl -s -k -x "$proxy" -H "$userAgent" -H "Cookie: $cookies" "${url}site:${target}+filetype:${extension}+${inFile}+${excludeTargets}${filter}${start}${pageNum}" | grep -Eo '(http|https)://[a-zA-Z0-9./?=_%:-]*' | grep -i "${target}" | grep -viE "google" | grep -i "${extension}" | urlDecode | sort -u)
 
 		elif [ -n "$dictionary" ]; then
-			request=$(curl -s -k -x "$proxy" -H "$userAgent" "${url}site:${target}+${excludeTargets}+inurl:\"${inUrl}\"${filter}${start}${pageNum}" | grep -Eo '(http|https)://[a-zA-Z0-9./?=_%:-]*' | grep -i "${target}/" | grep -viE "google" | urlDecode | sort -u)
+			request=$(curl -s -k -x "$proxy" -H "$userAgent" -H "Cookie: $cookies" "${url}site:${target}+${excludeTargets}+inurl:%22${inUrl}%22${filter}${start}${pageNum}" | grep -Eo '(http|https)://[a-zA-Z0-9./?=_%:-]*' | grep -i "${target}/" | grep -viE "google" | urlDecode | sort -u)
 		
 		elif [ -n "$subdomain" ]; then
-			request=$(curl -s -k -x "$proxy" -H "$userAgent" "${url}site:*.${target}+-site:www.${target}${filter}${start}${pageNum}" | grep -Eo "(http|https)://[a-zA-Z0-9./?=_%:-]*${target}" | grep -viE "google" | sort -u)
+			#echo "curl -s -k -x \"$proxy\" -H \"$userAgent\" -H \"Cookie: $cookies\" \"${url}site:*.${target}+-site:www.${target}${filter}${start}${pageNum}\" | grep -Eo \"(http|https)://[a-zA-Z0-9./?=_%:-]*${target}\" | grep -viE \"google\" | sort -u"
+			request=$(curl -s -k -x "$proxy" -H "$userAgent" -H "Cookie: $cookies" "${url}site:*.${target}+-site:www.${target}${filter}${start}${pageNum}" | grep -Eo "(http|https)://[a-zA-Z0-9./?=_%:-]*${target}" | grep -viE "google" | sort -u)
 
 		elif [ -n "$contents" ]; then
-			request=$(curl -s -k -x "$proxy" -H "$userAgent" "${url}site:${target}+${inFile}+${excludeTargets}${filter}${start}${pageNum}" | grep -Eo '(http|https)://[a-zA-Z0-9./?=_%:-]*' | grep -i "${target}/" | grep -viE "google" | urlDecode | sort -u)
+			request=$(curl -s -k -x "$proxy" -H "$userAgent" -H "Cookie: $cookies" "${url}site:${target}+${inFile}+${excludeTargets}${filter}${start}${pageNum}" | grep -Eo '(http|https)://[a-zA-Z0-9./?=_%:-]*' | grep -i "${target}/" | grep -viE "google" | urlDecode | sort -u)
 		fi
 
 		if [ -z "$request" ]; then
@@ -251,8 +265,9 @@ function requestRun(){
 		fi
 		
 		# Request storage
-		requestStorage+="
-$request"
+		echo "----------------------------"
+		echo -n $request
+		requestStorage+="$request"
     		
 		# Pages Incremental
 		((page++))
@@ -509,3 +524,4 @@ elif [ -n "$target" ] && [ -n "$contents" ] && [ -z "$subdomain" ] && [ -z "$dic
 else
 	showError
 fi
+
