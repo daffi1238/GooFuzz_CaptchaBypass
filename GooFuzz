@@ -9,10 +9,6 @@ start="&start="
 userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
 version="1.2.5"
 
-# Cookie generation and inclusion
-python3 GetCookie.py
-cookies=$(awk -F";" '{print $1}' cookies.txt | paste -sd'; ' -)
-
 ## Effects
 cBold="\e[1m"
 cNormal="\e[0m"
@@ -506,6 +502,11 @@ done
 
 ## Continue
 showBanner
+
+# Cookie generation and inclusion
+python3 GetCookie.py
+cookies=$(awk -F";" '{print $1}' cookies.txt | paste -sd'; ' -)
+
 
 if [ -n "$target" ] && [ -n "$dictionary" ] && [ -z "$subdomain" ] && [ -z "$extension" ] && [ -z "$contents"]; then
 	dictionaryAttack
