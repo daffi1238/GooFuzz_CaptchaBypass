@@ -4,6 +4,8 @@ import os
 import sys
 import time
 import urllib.parse
+from typing import Optional, List
+
 
 from DrissionPage import ChromiumPage
 from RecaptchaSolver import RecaptchaSolver
@@ -323,63 +325,63 @@ def run_query_with_browser(
     output_file: str = None,
     headless: bool = False,
     user_agent: str = None,
+    engines: Optional[List[str]] = None,
 ):
-    """
-    Main loop:
-        - start ChromiumPage
-        - for each (label, query) build URLs, paginate, solve recaptchas, parse results
-        - print to stdout and optionally write to output file
-    """
     print(BANNER)
 
-    # Configure ChromiumPage
-    # You can pass arguments or profile here if needed
+    if not engines:
+        engines = ["google"]
+
+    # ⬇️ NUEVO: un solo navegador para todo
     browser = ChromiumPage()
     solver = RecaptchaSolver(browser)
 
     all_results_for_output = []
 
     try:
-        for label, query in queries:
-            print(f"\n===================================================================")
-            print(f"Target: {target}")
-            print(f"Query label: {label}")
-            print(f"Dork: {query}")
-            print(f"===================================================================")
+        for engine in engines:
+            print(f"\n########## Using search engine: {engine} ##########\n")
 
-            for page_idx in range(pages):
-                url = build_search_url(query, page_idx)
-                print(f"[+] Opening page {page_idx + 1}/{pages} -> {url}")
-                browser.get(url)
-                time.sleep(2)
+            for label, query in queries:
+                print(f"\n===================================================================")
+                print(f"Target: {target}")
+                print(f"Engine: {engine}")
+                print(f"Query label: {label}")
+                print(f"Dork: {query}")
+                print(f"===================================================================")
 
-                # Check if we hit a ban / recaptcha
-                maybe_solve_recaptcha(browser, solver)
+                for page_idx in range(pages):
+                    url = build_search_url_for_engine(engine, query, page_idx)
+                    print(f"[+] Opening page {page_idx + 1}/{pages} -> {url}")
+                    browser.get(url)
+                    time.sleep(2)
 
-                # Extract links
-                # In extension mode, label is extension, otherwise we don't filter.
-                filetype = label if label and "." not in label and label not in ("subdomains", query) else None
-                links = extract_links_from_results(browser, target, filetype=filetype)
+                    maybe_solve_recaptcha(browser, solver)
 
-                if not links:
-                    print("[-] No more results found on this page.")
-                    break
+                    filetype = label if label and "." not in label and label not in ("subdomains", query) else None
+                    links = extract_links_from_results(browser, target, filetype=filetype)
 
-                for link in links:
-                    print(link)
-                    all_results_for_output.append(link)
+                    if not links:
+                        print("[-] No more results found on this page.")
+                        break
 
-                if delay > 0:
-                    time.sleep(delay)
+                    for link in links:
+                        print(link)
+                        all_results_for_output.append(link)
 
-        if output_file and all_results_for_output:
-            with open(output_file, "a", encoding="utf-8") as f:
-                for link in all_results_for_output:
-                    f.write(link + "\n")
-            print(f"\n[+] Results appended to: {output_file}")
+                    if delay > 0:
+                        time.sleep(delay)
 
     finally:
+        # ⬇️ Cerrar al final de todo
         browser.close()
+
+    if output_file and all_results_for_output:
+        with open(output_file, "a", encoding="utf-8") as f:
+            for link in all_results_for_output:
+                f.write(link + "\n")
+        print(f"\n[+] Results appended to: {output_file}")
+
 
 
 def parse_args():
@@ -397,6 +399,14 @@ def parse_args():
     parser.add_argument("-x", "--exclusions", help="Exclusions: file or comma-separated domains")
     parser.add_argument("-r", "--raw", help="Raw dork (if set, other mode flags are ignored)")
 
+    # NEW: search engine selection
+    parser.add_argument(
+        "--engine",
+        default="google",
+        choices=["google", "bing", "yandex", "duckduckgo", "brave", "all"],
+        help="Search engine to use (default: google). Use 'all' to query all supported engines."
+    )
+
     # Modes (mutually exclusive)
     modes = parser.add_mutually_exclusive_group(required=False)
     modes.add_argument("-w", "--dictionary", help="Dictionary for inurl search (file or comma-separated)")
@@ -413,12 +423,73 @@ def parse_args():
     return parser.parse_args()
 
 
+def build_search_url_for_engine(engine: str, query: str, page_num: int, filter_flag: bool = False) -> str:
+    """
+    Build the search URL for the given engine, query and page number.
+    page_num is 0,1,2,...
+
+    filter_flag is only relevant for Google (&filter=0).
+    """
+    encoded_q = urllib.parse.quote_plus(query)
+
+    # Google
+    if engine == "google":
+        base_url = "https://www.google.com/search?q="
+        start = page_num * 10  # 0,10,20,...
+        url = f"{base_url}{encoded_q}&start={start}"
+        if not filter_flag:
+            url += "&filter=0"
+        return url
+
+    # Bing
+    if engine == "bing":
+        # 'first' es el índice (1-based) del primer resultado en esa página
+        base_url = "https://www.bing.com/search?q="
+        first = page_num * 10 + 1  # 1,11,21,...
+        return f"{base_url}{encoded_q}&first={first}"
+
+    # Yandex
+    if engine == "yandex":
+        # 'p' es el índice de página empezando en 0
+        base_url = "https://yandex.com/search/?text="
+        return f"{base_url}{encoded_q}&p={page_num}"
+
+    # DuckDuckGo (versión HTML, sin JS)
+    if engine == "duckduckgo":
+        base_url = "https://html.duckduckgo.com/html/?q="
+        if page_num == 0:
+            return f"{base_url}{encoded_q}"
+        # Paginación básica: s=offset, dc=doc count approx
+        offset = page_num * 30
+        dc = offset + 1
+        return f"{base_url}{encoded_q}&s={offset}&dc={dc}"
+
+    # Brave
+    if engine == "brave":
+        # Brave usa 'offset' para paginación
+        base_url = "https://search.brave.com/search?q="
+        offset = page_num  # 0,1,2,... (Brave se encarga del tamaño de página)
+        return f"{base_url}{encoded_q}&offset={offset}"
+
+    # Fallback si alguien mete algo raro
+    raise ValueError(f"Unsupported search engine: {engine}")
+
+
+
+
 def main():
     args = parse_args()
 
     target = args.target
     pages = max(args.pages, 1)
     delay = max(args.delay, 0.0)
+
+    # NEW: normalize engine argument into a list of engines
+    # This allows supporting "--engine all" and multiple engines in the future if needed.
+    if args.engine == "all":
+        engines = ["google", "bing", "yandex", "duckduckgo", "brave"]
+    else:
+        engines = [args.engine]
 
     # If user provides a raw dork, just use that directly.
     if args.raw:
@@ -459,6 +530,7 @@ def main():
         output_file=args.output,
         headless=args.headless,
         user_agent=args.user_agent,
+        engines=engines,  # NEW
     )
 
 
