@@ -1,3 +1,0 @@
-https://search.brave.com/search?q=site%3A*.tesla.com%20-site%3Awww.tesla.com%20!g
-https://search.brave.com/search?q=site%3A*.tesla.com%20-site%3Awww.tesla.com%20!b
-https://search.brave.com/search?q=site%3A*.tesla.com%20-site%3Awww.tesla.com%20!mojeek

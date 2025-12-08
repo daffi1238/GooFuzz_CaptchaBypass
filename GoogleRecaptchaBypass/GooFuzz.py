@@ -503,6 +503,16 @@ def run_query_with_browser(
                         all_results_for_output.append(link)
                         urls_by_engine[engine].append(link)
 
+                    # Write new links to per-engine file in real time
+                    if new_links:
+                        engine_filename = f"url_{engine}.txt"
+                        try:
+                            with open(engine_filename, "a", encoding="utf-8") as f:
+                                for link in new_links:
+                                    f.write(link + "\n")
+                        except Exception as e:
+                            print(f"[!] Failed to write to {engine_filename}: {e}", file=sys.stderr)
+
                     if delay > 0:
                         time.sleep(delay)
 

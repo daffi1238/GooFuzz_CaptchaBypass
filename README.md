@@ -55,5 +55,27 @@ El análisis de enlaces se hace offline con regex en Linux o con scripts adicion
 
 ## Uso
 ```
+git clone https://github.com/daffi1238/GooFuzz_CaptchaBypass
+cd ./GooFuzz_CaptchaBypass/GoogleRecaptchaBypass
 
+source ~/enum_venv39/bin/activate
+pip install -r requirements.txt
+
+
+########################## Examples ############################
+python3 GooFuzz.py  -t tesla.com -s --engine all
+python3 GooFuzz.py  -t tesla.com -e pdf --engine all
+
+########################## Results  #############################
+# subdomains
+cat url_* | grep -Ev "www\.bing\.com|yandex.com|duckduckgo.com" | grep -oP 'https?:\/\/\K([a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+)'  | sort -u
+
+
+# extensions
+cat ../wordlists/common-extensions.txt | xargs -I {} zsh -c 'timeout 90 python3 GooFuzz.py  -t tesla.com -e {} --engine all'
+
+cat ../wordlists/common-extensions.txt | xargs -I {} zsh -c 'timeout 90 python3 GooFuzz.py  -t tesla.com -e {}'
+
+cat ../wordlists/common-extensions.txt | xargs -I {} zsh -c 'timeout 30 python3 GooFuzz.py  -t tesla.com -w {}'
 ```
+
