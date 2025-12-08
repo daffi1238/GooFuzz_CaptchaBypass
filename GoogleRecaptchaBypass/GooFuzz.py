@@ -269,28 +269,65 @@ def maybe_solve_recaptcha(page: ChromiumPage, solver: RecaptchaSolver):
                 "Cuando hayas terminado, pulsa ENTER para continuar...\n"
             )
 
-def extract_links_from_results(page: ChromiumPage, target: str, filetype: str = None) -> list:
+def extract_links_from_results(
+    page: ChromiumPage,
+    target: str,
+    filetype: str = None,
+    engine: str = "google",
+) -> list:
     """
-    Parse the Google results page in the browser and extract relevant links.
-
-    NOTE: Google changes HTML structure frequently.
-    This function uses typical selectors, but you may need to adjust.
+    Parse the search results page in the browser and extract relevant links.
 
     We:
-        - look for organic result links
+        - use different selectors per search engine
+        - fall back to generic <a> selection if needed
         - filter by target domain
         - optionally filter by filetype extension
     """
     links = []
+    engine = (engine or "google").lower()
 
-    # Typical organic result selector (desktop):
-    #   div.yuRUbf > a
-    # But we add fallback to any link inside #search.
     try:
-        result_anchors = page.eles("css: div.yuRUbf a")
+        # Engine-specific selectors for organic results
+        if engine == "google":
+            # Typical Google desktop organic results
+            result_anchors = page.eles("css: div.yuRUbf a")
+            if not result_anchors:
+                result_anchors = page.eles("css: #search a")
+
+        elif engine == "bing":
+            # Bing organic results usually under li.b_algo h2 a
+            result_anchors = page.eles("css: li.b_algo h2 a")
+            if not result_anchors:
+                result_anchors = page.eles("css: #b_results a")
+
+        elif engine == "yandex":
+            # Yandex SERP results anchors
+            result_anchors = page.eles("css: .serp-item a[href]")
+            if not result_anchors:
+                result_anchors = page.eles("css: a.Link[href]")
+
+        elif engine == "duckduckgo":
+            # DuckDuckGo: result__a is main result title link
+            result_anchors = page.eles("css: a.result__a")
+            if not result_anchors:
+                result_anchors = page.eles("css: #links a[href]")
+
+        elif engine == "brave":
+            # Brave Search: result title anchor
+            result_anchors = page.eles("css: a[data-testid='result-title-a']")
+            if not result_anchors:
+                # Fallback to main results container links
+                result_anchors = page.eles("css: main a[href]")
+
+        else:
+            # Unknown engine: pick any link in the document as a fallback
+            result_anchors = page.eles("css: a[href]")
+
+        # Final generic fallback if all of the above fail
         if not result_anchors:
-            # Fallback selector
-            result_anchors = page.eles("css: #search a")
+            result_anchors = page.eles("css: a[href]")
+
     except Exception:
         result_anchors = []
 
@@ -305,20 +342,31 @@ def extract_links_from_results(page: ChromiumPage, target: str, filetype: str = 
         if not href:
             continue
 
-        # Basic filters to remove Google junk
+        # Basic filters to remove junk
+        # NOTE: We keep this generic; you may want to tune per engine if needed.
         if "google." in href:
+            # Skip Google own URLs (cache, translate, etc.)
             continue
+        if "bing.com" in href and "q=" in href and "redirect" in href:
+            # Example: skip Bing redirector URLs if you see them
+            continue
+
         if not href.startswith("http"):
             continue
 
+        # Filter by target domain
         if target_lower not in href.lower():
             continue
 
+        # Optional filetype filter
         if filetype:
-            # Simple check, e.g. ".pdf" in URL
-            if not href.lower().endswith("." + filetype.lower()):
+            ext = filetype.lower()
+            href_lower = href.lower()
+
+            # Simple check: URL ends with ".ext"
+            if not href_lower.endswith("." + ext):
                 # Still allow if the URL contains ".ext" somewhere
-                if f".{filetype.lower()}" not in href.lower():
+                if f".{ext}" not in href_lower:
                     continue
 
         links.append(href)
@@ -342,6 +390,7 @@ def run_query_with_browser(
     output_file: str = None,
     headless: bool = False,
     user_agent: str = None,
+    keep_open: bool = False,
     engines: Optional[List[str]] = None,
     save_html_dir: Optional[str] = None,
 ):
@@ -354,7 +403,7 @@ def run_query_with_browser(
     if save_html_dir:
         os.makedirs(save_html_dir, exist_ok=True)
 
-    # Single browser instance
+    # TODO: headless/user_agent handling could be plugged in ChromiumPage options here.
     browser = ChromiumPage()
     solver = RecaptchaSolver(browser)
 
@@ -368,7 +417,7 @@ def run_query_with_browser(
             first_engine = False
         else:
             # Create a new tab and activate it
-            tab = browser.new_tab()  # you can pass a URL here if you want
+            tab = browser.new_tab()
             try:
                 # Important: activate this tab so .get() works on it
                 tab.set.activate()
@@ -377,9 +426,13 @@ def run_query_with_browser(
                 pass
             engine_tabs[engine] = tab
 
-    all_results_for_output = []
+    # Global containers
+    all_results_for_output = []          # All links found (for global output_file)
+    seen_links = set()                  # Global dedup across engines and phases
+    urls_by_engine = {eng: [] for eng in engines}  # Per-engine storage
 
     try:
+        # ---------- Automatic dork-based scraping phase ----------
         for engine in engines:
             print(f"\n########## Using search engine: {engine} ##########\n")
 
@@ -419,7 +472,7 @@ def run_query_with_browser(
                         except Exception as e:
                             print(f"[!] Failed to save HTML to {filepath}: {e}", file=sys.stderr)
 
-                    # Optional: still extract links on the fly
+                    # Decide filetype filter based on label (extension mode)
                     filetype = (
                         label
                         if label
@@ -428,28 +481,88 @@ def run_query_with_browser(
                         else None
                     )
 
-                    links = extract_links_from_results(page_obj, target, filetype=filetype)
+                    links = extract_links_from_results(
+                        page=page_obj,
+                        target=target,
+                        filetype=filetype,
+                        engine=engine,
+                    )
 
                     if not links:
                         print("[-] No more results found on this page.")
-                        # Even si no hay enlaces, ya hemos guardado el HTML
+                        # Even if there are no links, we already saved the HTML
                         break
 
-                    for link in links:
+                    # Register only new links globally
+                    new_links = [link for link in links if link not in seen_links]
+
+                    for link in new_links:
+                        seen_links.add(link)
                         print(link)
+
                         all_results_for_output.append(link)
+                        urls_by_engine[engine].append(link)
 
                     if delay > 0:
                         time.sleep(delay)
 
-    finally:
-        browser.close()
+        # ---------- Realtime monitoring phase ----------
+        if keep_open:
+            print("\n[+] Automatic phase finished.")
+            print("[+] Entering realtime monitoring mode (manual browsing + auto-scraping).")
+            monitor_tabs_realtime(
+                engine_tabs=engine_tabs,
+                target=target,
+                seen_links=seen_links,
+                all_results_for_output=all_results_for_output,
+                urls_by_engine=urls_by_engine,
+                output_file=output_file,    # Currently not writing per-link in realtime
+                poll_interval=5.0,          # Adjust interval as needed
+            )
 
+    finally:
+        # Only close the browser if explicitly requested
+        if not keep_open:
+            browser.close()
+        else:
+            print("[*] keep_open=True -> not closing browser from script.")
+            print("    When Python process exits, browser will normally close as well.")
+
+    # -------- Save per-engine URL files at the end --------
+    print("\n[+] Saving per-engine URL files...")
+
+    for eng, links in urls_by_engine.items():
+        if not links:
+            print(f"[-] No links found for {eng}, skipping file.")
+            continue
+
+        # Deduplicate preserving order
+        unique = []
+        seen_local = set()
+        for link in links:
+            if link not in seen_local:
+                seen_local.add(link)
+                unique.append(link)
+
+        filename = f"url_{eng}.txt"
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                for l in unique:
+                    f.write(l + "\n")
+            print(f"[+] Saved {len(unique)} links to: {filename}")
+        except Exception as e:
+            print(f"[!] Error writing {filename}: {e}")
+
+    # -------- Global output file (if requested) --------
     if output_file and all_results_for_output:
-        with open(output_file, "a", encoding="utf-8") as f:
-            for link in all_results_for_output:
-                f.write(link + "\n")
-        print(f"\n[+] Results appended to: {output_file}")
+        try:
+            with open(output_file, "a", encoding="utf-8") as f:
+                for link in all_results_for_output:
+                    f.write(link + "\n")
+            print(f"\n[+] Results appended to: {output_file}")
+        except Exception as e:
+            print(f"[!] Error writing global output file {output_file}: {e}")
+
 
 
 
@@ -549,6 +662,63 @@ def build_search_url_for_engine(engine: str, query: str, page_num: int, filter_f
     raise ValueError(f"Unsupported search engine: {engine}")
 
 
+def monitor_tabs_realtime(
+    engine_tabs: dict,
+    target: str,
+    seen_links: set,
+    all_results_for_output: list,
+    urls_by_engine: dict,
+    output_file: Optional[str] = None,
+    poll_interval: float = 2.0,
+):
+    """
+    Continuously monitor each engine tab and extract links in "near real-time".
+
+    - Periodically runs extract_links_from_results() on each tab.
+    - Prints and records only *new* links (using seen_links set).
+    - Appends new links to per-engine storage (urls_by_engine).
+    - Optionally can be extended to write to a global output file.
+
+    User can keep manually browsing (new searches, next pages, etc.).
+    Stop with Ctrl+C in the terminal.
+    """
+    print("\n[Realtime] Starting live monitoring of all tabs.")
+    print("          You can manually browse in the browser.")
+    print("          Press Ctrl+C in this terminal to stop realtime mode.\n")
+
+    try:
+        while True:
+            for engine, page_obj in engine_tabs.items():
+                try:
+                    links = extract_links_from_results(
+                        page=page_obj,
+                        target=target,
+                        filetype=None,   # In realtime mode, ignore filetype filter; adjust if needed
+                        engine=engine,
+                    )
+                except Exception as e:
+                    print(f"[!] Error extracting links from {engine} tab: {e}", file=sys.stderr)
+                    continue
+
+                new_links = [link for link in links if link not in seen_links]
+                if not new_links:
+                    continue
+
+                print(f"\n[+] {len(new_links)} new link(s) found in {engine} tab:")
+                for link in new_links:
+                    seen_links.add(link)
+                    all_results_for_output.append(link)
+                    urls_by_engine[engine].append(link)
+                    print(link)
+
+                    # If you ever want to write to a global output_file in realtime,
+                    # you can do it here. For now we keep "only at the end" logic.
+
+            time.sleep(poll_interval)
+
+    except KeyboardInterrupt:
+        print("\n[Realtime] Monitoring stopped by user (Ctrl+C).")
+
 
 
 def main():
@@ -592,6 +762,7 @@ def main():
             print("[!] No valid query could be built. Check your arguments.")
             sys.exit(1)
 
+    # Run automated queries
     run_query_with_browser(
         queries=queries,
         target=target,
@@ -601,7 +772,15 @@ def main():
         headless=args.headless,
         user_agent=args.user_agent,
         engines=engines,
-        save_html_dir=args.save_html_dir,  # ⬅️ nuevo
+        keep_open=True,              # <--- do not close browser in finally
+        save_html_dir=args.save_html_dir,
+    )
+
+    # 🔴 IMPORTANT: keep the process alive so Chromium stays open
+    input(
+        "\n[+] Finished automated queries.\n"
+        "You can now freely navigate in the browser window.\n"
+        "When you are done and want to close everything, press ENTER here...\n"
     )
 
 

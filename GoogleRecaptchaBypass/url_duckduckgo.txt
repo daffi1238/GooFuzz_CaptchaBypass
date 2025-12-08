@@ -1,0 +1,16 @@
+http://tesla.com/about
+https://inside.tesla.com/en-US/
+https://inside.tesla.com/en-US/home
+https://sso.tesla.com/adfs/ls/?SAMLRequest=jVDBTsMwDP2VKvc0aQ%2bsi9pKFVwqjcsGHLh5jbVVapISO2yfT2AgcZz1fLH1nv1eOyQ%2b%2bz1%2bJCQuxqdOxNlK21QwwcbKY7N9kDqX1BuopG4sWEBoYNuI4g0jzcF3oi61KEaihKMnBs95pOtaVhn6pdam%2bsa7KAYijJw5j8FTchgPGD%2fnCV%2f3u06cmVcySl0ul3JJyZVTcCq3S4yKKCgCt9QKJlJrIM5qzHE%2b5u1NbfanX7nRW7x2ohLF1S2eOpGiNwFoJuPBIRmezGF43pn8uFlj4DCFRfTtj4V4Dwn%2bjIj%2bzrdplQ45p8fQqtuhvlX%2f0%2b%2b%2fAA%3d%3d
+https://inside.tesla.com/en-US/help-center
+https://inside.tesla.com/en-US/auth/login
+https://inside.tesla.com/en-US/news
+https://inside.tesla.com/en-US/en-us/auth/login
+https://inside.tesla.com/en-US/calendar
+https://sso.tesla.com/adfs/ls/idpinitiatedsignon.aspx
+https://accounts.tesla.com/account-settings/personal-information
+https://track.tesla.com/
+https://ehs.tesla.com/en-US/
+https://accounts.tesla.com/business/get-started
+http://tesla.com/teslaaccount
+https://ideas.tesla.com/

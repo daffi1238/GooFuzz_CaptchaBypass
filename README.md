@@ -9,7 +9,7 @@ pip install DrissionPage
 pip install SpeechRecognition
 ```
 
-## 📌 GooFuzz-Browser (Simplified)
+## 📌 GooFuzz-Browser 
 
 Crawler multi-motor basado en navegador real + análisis offline de endpoints
 
@@ -50,4 +50,10 @@ El análisis de enlaces se hace offline con regex en Linux o con scripts adicion
 + goofuzz_browser_simplified.py     → crawler (navegador real)
 + html_sessions/                    → HTML crudos guardados
 + analysis/                         → scripts opcionales de análisis offline
+```
+
+
+## Uso
+```
+
 ```
