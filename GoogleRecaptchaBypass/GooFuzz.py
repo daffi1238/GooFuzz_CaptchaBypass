@@ -455,11 +455,35 @@ def run_query_with_browser(
                     url = build_search_url_for_engine(engine, query, page_idx)
                     print(f"[+] [{engine}] Opening page {page_idx + 1}/{pages} -> {url}")
                     page_obj.get(url)
-                    time.sleep(2)
-
-                    # Try to handle Recaptcha / temp ban
+                    
+                    # 🔴 ESPERA ACTIVA: Asegurar que la página esté completamente cargada
+                    max_wait = 30  # Timeout máximo de espera
+                    wait_start = time.time()
+                    
+                    while True:
+                        elapsed = time.time() - wait_start
+                        if elapsed > max_wait:
+                            print(f"[!] Timeout esperando carga completa de página ({max_wait}s)")
+                            break
+                            
+                        # Verificar que el DOM esté listo
+                        try:
+                            # Intentar extraer elementos, si falla es que no está listo
+                            test_elements = page_obj.eles("css: body")
+                            if test_elements:
+                                print(f"[+] Página cargada correctamente ({elapsed:.1f}s)")
+                                break
+                        except Exception:
+                            pass
+                            
+                        time.sleep(0.5)  # Pequeña pausa antes de reintentar
+                    
+                    # 🔴 RESOLVER CAPTCHA ANTES DE EXTRAER
                     maybe_solve_recaptcha(page_obj, solver)
-
+                    
+                    # 🔴 SEGUNDA VERIFICACIÓN: DOM post-CAPTCHA
+                    time.sleep(2)  # Dar tiempo al DOM a actualizarse tras resolver CAPTCHA
+                    
                     # Save raw HTML if requested
                     if save_html_dir:
                         filename = f"{engine}_{label_safe}_p{page_idx + 1}_{query_safe}.html"
@@ -471,8 +495,8 @@ def run_query_with_browser(
                             print(f"[+] Saved HTML to {filepath}")
                         except Exception as e:
                             print(f"[!] Failed to save HTML to {filepath}: {e}", file=sys.stderr)
-
-                    # Decide filetype filter based on label (extension mode)
+                    
+                    # Decide filetype filter
                     filetype = (
                         label
                         if label
@@ -480,30 +504,56 @@ def run_query_with_browser(
                         and label not in ("subdomains", query)
                         else None
                     )
-
-                    links = extract_links_from_results(
-                        page=page_obj,
-                        target=target,
-                        filetype=filetype,
-                        engine=engine,
-                    )
-
+                    
+                    # 🔴 EXTRACCIÓN GARANTIZADA: No avanzar hasta tener resultado
+                    extraction_attempts = 0
+                    max_attempts = 3
+                    links = []
+                    
+                    while extraction_attempts < max_attempts:
+                        extraction_attempts += 1
+                        print(f"[+] Intento de extracción {extraction_attempts}/{max_attempts}...")
+                        
+                        links = extract_links_from_results(
+                            page=page_obj,
+                            target=target,
+                            filetype=filetype,
+                            engine=engine,
+                        )
+                        
+                        if links:
+                            print(f"[+] ✓ Extraídas {len(links)} URLs exitosamente")
+                            break
+                        else:
+                            print(f"[-] No se encontraron links en intento {extraction_attempts}")
+                            if extraction_attempts < max_attempts:
+                                print(f"    Esperando 3s antes de reintentar...")
+                                time.sleep(3)
+                    
+                    # 🔴 VERIFICACIÓN FINAL
                     if not links:
-                        print("[-] No more results found on this page.")
-                        # Even if there are no links, we already saved the HTML
-                        break
-
-                    # Register only new links globally
+                        print("[-] ⚠️ No se pudieron extraer URLs tras múltiples intentos")
+                        print("    Considera que puede ser:")
+                        print("    - Fin de resultados")
+                        print("    - CAPTCHA no resuelto")
+                        print("    - Cambio en estructura HTML del buscador")
+                        
+                        # Opcional: pausa para inspección manual
+                        user_choice = input("    ¿Continuar de todos modos? (s/N): ").strip().lower()
+                        if user_choice != 's':
+                            print("    Deteniendo búsqueda en este motor...")
+                            break
+                    
+                    # Procesar links encontrados
                     new_links = [link for link in links if link not in seen_links]
-
+                    
                     for link in new_links:
                         seen_links.add(link)
                         print(link)
-
                         all_results_for_output.append(link)
                         urls_by_engine[engine].append(link)
-
-                    # Write new links to per-engine file in real time
+                    
+                    # Escribir en tiempo real
                     if new_links:
                         engine_filename = f"url_{engine}.txt"
                         try:
@@ -512,8 +562,10 @@ def run_query_with_browser(
                                     f.write(link + "\n")
                         except Exception as e:
                             print(f"[!] Failed to write to {engine_filename}: {e}", file=sys.stderr)
-
-                    if delay > 0:
+                    
+                    # 🔴 DELAY SOLO DESPUÉS DE PROCESAR TODO
+                    if delay > 0 and page_idx < pages - 1:  # No delay en última página
+                        print(f"[+] Esperando {delay}s antes de siguiente página...")
                         time.sleep(delay)
 
         # ---------- Realtime monitoring phase ----------
