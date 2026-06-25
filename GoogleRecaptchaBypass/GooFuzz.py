@@ -403,219 +403,252 @@ def run_query_with_browser(
     if save_html_dir:
         os.makedirs(save_html_dir, exist_ok=True)
 
-    # TODO: headless/user_agent handling could be plugged in ChromiumPage options here.
     browser = ChromiumPage()
     solver = RecaptchaSolver(browser)
 
-    # One tab per search engine
-    engine_tabs = {}
-    first_engine = True
-    for engine in engines:
-        if first_engine:
-            # Use main page object for the first engine
-            engine_tabs[engine] = browser
-            first_engine = False
-        else:
-            # Create a new tab and activate it
-            tab = browser.new_tab()
-            try:
-                # Important: activate this tab so .get() works on it
-                tab.set.activate()
-            except Exception:
-                # Some versions/objects may not have set.activate()
-                pass
-            engine_tabs[engine] = tab
-
+    # 🔴 NUEVA ESTRUCTURA: Una pestaña por cada combinación (engine, query)
+    query_tabs = {}  # Key: (engine, label), Value: tab object
+    
     # Global containers
-    all_results_for_output = []          # All links found (for global output_file)
-    seen_links = set()                  # Global dedup across engines and phases
-    urls_by_engine = {eng: [] for eng in engines}  # Per-engine storage
+    all_results_for_output = []
+    seen_links = set()
+    urls_by_engine = {eng: [] for eng in engines}
 
     try:
-        # ---------- Automatic dork-based scraping phase ----------
+        # ---------- CREATE TABS FOR ALL QUERIES ----------
+        print(f"\n[+] Creating tabs for {len(engines)} engine(s) × {len(queries)} query/queries...")
+        
+        tab_index = 0
         for engine in engines:
-            print(f"\n########## Using search engine: {engine} ##########\n")
-
-            # Select the tab dedicated to this engine
-            page_obj = engine_tabs[engine]
-
             for label, query in queries:
-                print(f"\n===================================================================")
-                print(f"Target: {target}")
-                print(f"Engine: {engine}")
-                print(f"Query label: {label}")
-                print(f"Dork: {query}")
-                print(f"===================================================================")
+                if tab_index == 0:
+                    # Use the first tab (main browser page)
+                    tab_obj = browser
+                else:
+                    # Create new tab
+                    tab_obj = browser.new_tab()
+                    try:
+                        tab_obj.set.activate()
+                    except Exception:
+                        pass
+                
+                query_tabs[(engine, label)] = {
+                    'tab': tab_obj,
+                    'query': query,
+                    'active': True  # Flag to skip if user chooses to stop this query
+                }
+                tab_index += 1
+                print(f"    [Tab {tab_index}] {engine} - {label}")
+        
+        print(f"[+] Total tabs created: {len(query_tabs)}\n")
 
-                # Build a safe chunk for filenames
-                label_safe = sanitize_for_filename(str(label)) if label else "nolabel"
-                query_safe = sanitize_for_filename(query)
-
-                for page_idx in range(pages):
-                    url = build_search_url_for_engine(engine, query, page_idx)
-                    print(f"[+] [{engine}] Opening page {page_idx + 1}/{pages} -> {url}")
-                    page_obj.get(url)
+        # ---------- PROCESS ALL QUERIES SEQUENTIALLY ----------
+        for page_idx in range(pages):
+            print(f"\n{'='*70}")
+            print(f"  PROCESSING PAGE {page_idx + 1}/{pages}")
+            print(f"{'='*70}\n")
+            
+            # 🔴 Iterate through tabs ONE BY ONE with delay between them
+            for tab_num, ((engine, label), tab_info) in enumerate(query_tabs.items(), 1):
+                # Skip if this query was deactivated
+                if not tab_info['active']:
+                    print(f"[Tab {tab_num}] Skipped (deactivated): [{engine}] {label}")
+                    continue
+                
+                page_obj = tab_info['tab']
+                query = tab_info['query']
+                
+                print(f"\n{'─'*70}")
+                print(f"[Tab {tab_num}/{len(query_tabs)}] Engine: {engine} | Query: {label} | Page: {page_idx + 1}")
+                print(f"{'─'*70}")
+                
+                # Build URL
+                url = build_search_url_for_engine(engine, query, page_idx)
+                print(f"[+] Opening: {url}")
+                
+                # Activate this tab before loading
+                try:
+                    page_obj.set.activate()
+                    time.sleep(0.5)  # Small delay to ensure tab activation
+                except Exception:
+                    pass
+                
+                page_obj.get(url)
+                
+                # Wait for page load
+                max_wait = 30
+                wait_start = time.time()
+                
+                while True:
+                    elapsed = time.time() - wait_start
+                    if elapsed > max_wait:
+                        print(f"[!] Timeout ({max_wait}s)")
+                        break
                     
-                    # 🔴 ESPERA ACTIVA: Asegurar que la página esté completamente cargada
-                    max_wait = 30  # Timeout máximo de espera
-                    wait_start = time.time()
-                    
-                    while True:
-                        elapsed = time.time() - wait_start
-                        if elapsed > max_wait:
-                            print(f"[!] Timeout esperando carga completa de página ({max_wait}s)")
+                    try:
+                        test_elements = page_obj.eles("css: body")
+                        if test_elements:
+                            print(f"[+] Loaded in {elapsed:.1f}s")
                             break
-                            
-                        # Verificar que el DOM esté listo
-                        try:
-                            # Intentar extraer elementos, si falla es que no está listo
-                            test_elements = page_obj.eles("css: body")
-                            if test_elements:
-                                print(f"[+] Página cargada correctamente ({elapsed:.1f}s)")
-                                break
-                        except Exception:
-                            pass
-                            
-                        time.sleep(0.5)  # Pequeña pausa antes de reintentar
+                    except Exception:
+                        pass
                     
-                    # 🔴 RESOLVER CAPTCHA ANTES DE EXTRAER
-                    maybe_solve_recaptcha(page_obj, solver)
+                    time.sleep(0.5)
+                
+                # Resolve CAPTCHA
+                maybe_solve_recaptcha(page_obj, solver)
+                time.sleep(2)
+                
+                # Save HTML if requested
+                if save_html_dir:
+                    label_safe = sanitize_for_filename(str(label))
+                    query_safe = sanitize_for_filename(query)
+                    filename = f"{engine}_{label_safe}_p{page_idx + 1}_{query_safe}.html"
+                    filepath = os.path.join(save_html_dir, filename)
+                    try:
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            f.write(page_obj.html)
+                        print(f"[+] Saved HTML: {filename}")
+                    except Exception as e:
+                        print(f"[!] Failed to save HTML: {e}", file=sys.stderr)
+                
+                # Determine filetype
+                filetype = (
+                    label
+                    if label and "." not in label and label not in ("subdomains", query)
+                    else None
+                )
+                
+                # Extract links with retries
+                extraction_attempts = 0
+                max_attempts = 1
+                links = []
+                
+                while extraction_attempts < max_attempts:
+                    extraction_attempts += 1
+                    print(f"[+] Extraction attempt {extraction_attempts}/{max_attempts}...")
                     
-                    # 🔴 SEGUNDA VERIFICACIÓN: DOM post-CAPTCHA
-                    time.sleep(2)  # Dar tiempo al DOM a actualizarse tras resolver CAPTCHA
-                    
-                    # Save raw HTML if requested
-                    if save_html_dir:
-                        filename = f"{engine}_{label_safe}_p{page_idx + 1}_{query_safe}.html"
-                        filepath = os.path.join(save_html_dir, filename)
-                        try:
-                            html_content = page_obj.html
-                            with open(filepath, "w", encoding="utf-8") as f:
-                                f.write(html_content)
-                            print(f"[+] Saved HTML to {filepath}")
-                        except Exception as e:
-                            print(f"[!] Failed to save HTML to {filepath}: {e}", file=sys.stderr)
-                    
-                    # Decide filetype filter
-                    filetype = (
-                        label
-                        if label
-                        and "." not in label
-                        and label not in ("subdomains", query)
-                        else None
+                    links = extract_links_from_results(
+                        page=page_obj,
+                        target=target,
+                        filetype=filetype,
+                        engine=engine,
                     )
                     
-                    # 🔴 EXTRACCIÓN GARANTIZADA: No avanzar hasta tener resultado
-                    extraction_attempts = 0
-                    max_attempts = 3
-                    links = []
+                    if links:
+                        print(f"[+] ✓ Found {len(links)} URLs")
+                        break
+                    else:
+                        print(f"[-] No links found")
+                        if extraction_attempts < max_attempts:
+                            print(f"    Waiting 3s...")
+                            time.sleep(3)
+                
+                # Handle no results
+                if not links:
+                    print("[-] ⚠️ No URLs after retries")
+                    print("    Possible reasons:")
+                    print("    - End of results")
+                    print("    - Unresolved CAPTCHA")
+                    print("    - HTML structure changed")
                     
-                    while extraction_attempts < max_attempts:
-                        extraction_attempts += 1
-                        print(f"[+] Intento de extracción {extraction_attempts}/{max_attempts}...")
-                        
-                        links = extract_links_from_results(
-                            page=page_obj,
-                            target=target,
-                            filetype=filetype,
-                            engine=engine,
-                        )
-                        
-                        if links:
-                            print(f"[+] ✓ Extraídas {len(links)} URLs exitosamente")
-                            break
-                        else:
-                            print(f"[-] No se encontraron links en intento {extraction_attempts}")
-                            if extraction_attempts < max_attempts:
-                                print(f"    Esperando 3s antes de reintentar...")
-                                time.sleep(3)
-                    
-                    # 🔴 VERIFICACIÓN FINAL
-                    if not links:
-                        print("[-] ⚠️ No se pudieron extraer URLs tras múltiples intentos")
-                        print("    Considera que puede ser:")
-                        print("    - Fin de resultados")
-                        print("    - CAPTCHA no resuelto")
-                        print("    - Cambio en estructura HTML del buscador")
-                        
-                        # Opcional: pausa para inspección manual
-                        user_choice = input("    ¿Continuar de todos modos? (s/N): ").strip().lower()
-                        if user_choice != 's':
-                            print("    Deteniendo búsqueda en este motor...")
-                            break
-                    
-                    # Procesar links encontrados
-                    new_links = [link for link in links if link not in seen_links]
-                    
+                    # user_choice = input("    Continue this query on next pages? (y/N): ").strip().lower()
+                    # if user_choice != 'y' and user_choice != 's':
+                    #     print(f"    Deactivating query: [{engine}] {label}")
+                    #     tab_info['active'] = False
+                    #     continue
+                
+                # Process new links
+                new_links = [link for link in links if link not in seen_links]
+                
+                if new_links:
+                    print(f"\n[+] New links found: {len(new_links)}")
                     for link in new_links:
                         seen_links.add(link)
-                        print(link)
+                        print(f"    {link}")
                         all_results_for_output.append(link)
                         urls_by_engine[engine].append(link)
+                else:
+                    print(f"[-] No new links (all duplicates)")
+                
+                # Write to per-engine file in real-time
+                if new_links:
+                    engine_filename = f"url_{engine}.txt"
+                    try:
+                        with open(engine_filename, "a", encoding="utf-8") as f:
+                            for link in new_links:
+                                f.write(link + "\n")
+                        print(f"[+] Appended to: {engine_filename}")
+                    except Exception as e:
+                        print(f"[!] Write error: {e}", file=sys.stderr)
+                
+                # 🔴 DELAY BETWEEN TABS (not after the last tab of the last page)
+                is_last_tab = (tab_num == len(query_tabs))
+                is_last_page = (page_idx == pages - 1)
+                
+                if delay > 0 and not (is_last_tab and is_last_page):
+                    # Skip inactive tabs in the count
+                    remaining_active = sum(1 for t in list(query_tabs.values())[tab_num:] if t['active'])
                     
-                    # Escribir en tiempo real
-                    if new_links:
-                        engine_filename = f"url_{engine}.txt"
-                        try:
-                            with open(engine_filename, "a", encoding="utf-8") as f:
-                                for link in new_links:
-                                    f.write(link + "\n")
-                        except Exception as e:
-                            print(f"[!] Failed to write to {engine_filename}: {e}", file=sys.stderr)
+                    if is_last_tab:
+                        # Last tab of this page round
+                        print(f"\n[+] Page {page_idx + 1} completed. Waiting {delay}s before next page...")
+                    else:
+                        # Between tabs
+                        print(f"\n[+] Waiting {delay}s before next tab...")
                     
-                    # 🔴 DELAY SOLO DESPUÉS DE PROCESAR TODO
-                    if delay > 0 and page_idx < pages - 1:  # No delay en última página
-                        print(f"[+] Esperando {delay}s antes de siguiente página...")
-                        time.sleep(delay)
+                    time.sleep(delay)
 
         # ---------- Realtime monitoring phase ----------
         if keep_open:
             print("\n[+] Automatic phase finished.")
-            print("[+] Entering realtime monitoring mode (manual browsing + auto-scraping).")
+            print("[+] Entering realtime monitoring mode.")
+            
+            # Convert query_tabs to engine_tabs for monitor function
+            engine_tabs_for_monitor = {}
+            for (engine, label), tab_info in query_tabs.items():
+                if engine not in engine_tabs_for_monitor:
+                    engine_tabs_for_monitor[engine] = tab_info['tab']
+            
             monitor_tabs_realtime(
-                engine_tabs=engine_tabs,
+                engine_tabs=engine_tabs_for_monitor,
                 target=target,
                 seen_links=seen_links,
                 all_results_for_output=all_results_for_output,
                 urls_by_engine=urls_by_engine,
-                output_file=output_file,    # Currently not writing per-link in realtime
-                poll_interval=5.0,          # Adjust interval as needed
+                output_file=output_file,
+                poll_interval=5.0,
             )
 
     finally:
-        # Only close the browser if explicitly requested
         if not keep_open:
             browser.close()
         else:
-            print("[*] keep_open=True -> not closing browser from script.")
-            print("    When Python process exits, browser will normally close as well.")
+            print("[*] keep_open=True -> browser stays open")
 
-    # -------- Save per-engine URL files at the end --------
+    # Save per-engine files
     print("\n[+] Saving per-engine URL files...")
-
     for eng, links in urls_by_engine.items():
         if not links:
-            print(f"[-] No links found for {eng}, skipping file.")
             continue
-
-        # Deduplicate preserving order
+        
         unique = []
         seen_local = set()
         for link in links:
             if link not in seen_local:
                 seen_local.add(link)
                 unique.append(link)
-
+        
         filename = f"url_{eng}.txt"
         try:
-            with open(filename, "w", encoding="utf-8") as f:
+            with open(filename, "a", encoding="utf-8") as f:
                 for l in unique:
                     f.write(l + "\n")
-            print(f"[+] Saved {len(unique)} links to: {filename}")
+            print(f"[+] Saved {len(unique)} links: {filename}")
         except Exception as e:
-            print(f"[!] Error writing {filename}: {e}")
+            print(f"[!] Error: {e}")
 
-    # -------- Global output file (if requested) --------
+    # Global output file
     if output_file and all_results_for_output:
         try:
             with open(output_file, "a", encoding="utf-8") as f:
@@ -623,9 +656,123 @@ def run_query_with_browser(
                     f.write(link + "\n")
             print(f"\n[+] Results appended to: {output_file}")
         except Exception as e:
-            print(f"[!] Error writing global output file {output_file}: {e}")
+            print(f"[!] Error: {e}")
 
+def build_inurl_chunked(dictionary: str, chunk_size: int = 10) -> list:
+    """
+    Build multiple inurl queries by chunking the dictionary.
+    Returns a list of tuples: [(label, inurl_query), ...]
+    
+    Args:
+        dictionary: file path, comma-separated list, or single word
+        chunk_size: number of words per chunk (default: 10)
+    
+    Returns:
+        List of (label, query_part) tuples
+        Example: [("words_1-10", 'inurl:"admin|config|..."'), ("words_11-20", ...)]
+    """
+    if not dictionary:
+        return []
 
+    words = []
+
+    # Read words from file
+    if os.path.isfile(dictionary):
+        with open(dictionary, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                w = line.strip()
+                if w:
+                    words.append(w)
+    # Parse comma-separated list
+    elif "," in dictionary:
+        for w in dictionary.split(","):
+            w = w.strip()
+            if w:
+                words.append(w)
+    # Single word
+    else:
+        words.append(dictionary.strip())
+
+    if not words:
+        return []
+
+    # Split into chunks
+    chunks = []
+    total_words = len(words)
+    
+    for i in range(0, total_words, chunk_size):
+        chunk = words[i:i + chunk_size]
+        start_idx = i + 1
+        end_idx = min(i + chunk_size, total_words)
+        
+        # Create label for this chunk
+        label = f"words_{start_idx}-{end_idx}"
+        
+        # Create inurl query for this chunk
+        inurl_query = f'inurl:"{"|".join(chunk)}"'
+        
+        chunks.append((label, inurl_query))
+    
+    return chunks
+
+def build_query(
+    target: str,
+    mode: str,
+    extension: str = None,
+    dictionary: str = None,
+    subdomain: bool = False,
+    contents: str = None,
+    exclusions: str = None,
+    chunk_size: int = 10,  # 🔴 NUEVO PARÁMETRO
+) -> list:
+    """
+    Build one or multiple dork queries depending on the mode.
+    Returns a list of tuples: [(label, query), ...]
+        - label: what we're looking for (e.g. "pdf", "words_1-10", etc.)
+        - query: actual Google query string WITHOUT url-encoding.
+    """
+    queries = []
+    base_target = target.strip()
+
+    exclude_str = build_exclusions(exclusions)
+    contents_str = build_contents(contents) if contents else ""
+
+    # Dictionary mode: site:target inurl:"..." (🔴 MODIFICADO PARA CHUNKS)
+    if mode == "dictionary" and dictionary:
+        chunks = build_inurl_chunked(dictionary, chunk_size)
+        
+        for label, inurl_str in chunks:
+            q = f"site:{base_target} {inurl_str}"
+            if exclude_str:
+                q += " " + exclude_str
+            queries.append((label, q))
+
+    # Extension mode: possibly multiple filetypes
+    elif mode == "extension":
+        exts = build_extension_list(extension)
+        for ext in exts:
+            q = f"site:{base_target} filetype:{ext}"
+            if contents_str:
+                q += " " + contents_str
+            if exclude_str:
+                q += " " + exclude_str
+            queries.append((ext, q))
+
+    # Subdomain mode
+    elif mode == "subdomain" and subdomain:
+        q = f"site:*.{base_target} -site:www.{base_target}"
+        if exclude_str:
+            q += " " + exclude_str
+        queries.append(("subdomains", q))
+
+    # Contents mode: site:target infile:"..."
+    elif mode == "contents" and contents_str:
+        q = f"site:{base_target} {contents_str}"
+        if exclude_str:
+            q += " " + exclude_str
+        queries.append((contents, q))
+
+    return queries
 
 
 def parse_args():
@@ -642,6 +789,7 @@ def parse_args():
     parser.add_argument("-o", "--output", help="Output file for results (append mode)")
     parser.add_argument("-x", "--exclusions", help="Exclusions: file or comma-separated domains")
     parser.add_argument("-r", "--raw", help="Raw dork (if set, other mode flags are ignored)")
+    
 
     # NEW: search engine selection
     parser.add_argument(
@@ -649,6 +797,12 @@ def parse_args():
         default="google",
         choices=["google", "bing", "yandex", "duckduckgo", "brave", "all"],
         help="Search engine to use (default: google). Use 'all' to query all supported engines."
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=10,
+        help="Number of words per chunk when using -w/--dictionary (default: 10)"
     )
     # to save html of the interactive browser session
     parser.add_argument(
@@ -818,6 +972,7 @@ def main():
             subdomain=args.subdomains,
             contents=args.contents,
             exclusions=args.exclusions,
+            chunk_size=args.chunk_size,  # 🔴 PASAR EL NUEVO PARÁMETRO
         )
 
         if not queries:
@@ -834,11 +989,10 @@ def main():
         headless=args.headless,
         user_agent=args.user_agent,
         engines=engines,
-        keep_open=True,              # <--- do not close browser in finally
+        keep_open=True,
         save_html_dir=args.save_html_dir,
     )
 
-    # 🔴 IMPORTANT: keep the process alive so Chromium stays open
     input(
         "\n[+] Finished automated queries.\n"
         "You can now freely navigate in the browser window.\n"
