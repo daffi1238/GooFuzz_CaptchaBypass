@@ -596,6 +596,15 @@ def run_query_with_browser(
                         print(f"[+] Appended to: {engine_filename}")
                     except Exception as e:
                         print(f"[!] Write error: {e}", file=sys.stderr)
+
+                    if output_file:
+                        try:
+                            with open(output_file, "a", encoding="utf-8") as f:
+                                for link in new_links:
+                                    f.write(link + "\n")
+                            print(f"[+] Appended to: {output_file}")
+                        except Exception as e:
+                            print(f"[!] Write error: {e}", file=sys.stderr)
                 
                 # 🔴 DELAY BETWEEN TABS (not after the last tab of the last page)
                 is_last_tab = (tab_num == len(query_tabs))
@@ -641,37 +650,14 @@ def run_query_with_browser(
         else:
             print("[*] keep_open=True -> browser stays open")
 
-    # Save per-engine files
-    print("\n[+] Saving per-engine URL files...")
+    # Summary
+    total = len(all_results_for_output)
+    print(f"\n[+] Total links collected: {total}")
     for eng, links in urls_by_engine.items():
-        if not links:
-            continue
-        
-        unique = []
-        seen_local = set()
-        for link in links:
-            if link not in seen_local:
-                seen_local.add(link)
-                unique.append(link)
-        
-        filename = f"url_{eng}.txt"
-        try:
-            with open(filename, "a", encoding="utf-8") as f:
-                for l in unique:
-                    f.write(l + "\n")
-            print(f"[+] Saved {len(unique)} links: {filename}")
-        except Exception as e:
-            print(f"[!] Error: {e}")
-
-    # Global output file
-    if output_file and all_results_for_output:
-        try:
-            with open(output_file, "a", encoding="utf-8") as f:
-                for link in all_results_for_output:
-                    f.write(link + "\n")
-            print(f"\n[+] Results appended to: {output_file}")
-        except Exception as e:
-            print(f"[!] Error: {e}")
+        if links:
+            print(f"    {eng}: {len(links)} links -> url_{eng}.txt")
+    if output_file:
+        print(f"    All engines -> {output_file}")
 
 def build_inurl_chunked(dictionary: str, chunk_size: int = 10) -> list:
     """
@@ -946,8 +932,21 @@ def monitor_tabs_realtime(
                     urls_by_engine[engine].append(link)
                     print(link)
 
-                    # If you ever want to write to a global output_file in realtime,
-                    # you can do it here. For now we keep "only at the end" logic.
+                if output_file:
+                    try:
+                        with open(output_file, "a", encoding="utf-8") as f:
+                            for link in new_links:
+                                f.write(link + "\n")
+                    except Exception as e:
+                        print(f"[!] Write error ({output_file}): {e}", file=sys.stderr)
+
+                engine_filename = f"url_{engine}.txt"
+                try:
+                    with open(engine_filename, "a", encoding="utf-8") as f:
+                        for link in new_links:
+                            f.write(link + "\n")
+                except Exception as e:
+                    print(f"[!] Write error ({engine_filename}): {e}", file=sys.stderr)
 
             time.sleep(poll_interval)
 
