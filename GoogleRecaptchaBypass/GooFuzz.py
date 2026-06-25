@@ -9,7 +9,7 @@ import re  # al principio del archivo
 
 
 
-from DrissionPage import ChromiumPage
+from DrissionPage import ChromiumPage, ChromiumOptions
 from RecaptchaSolver import RecaptchaSolver
 
 
@@ -393,6 +393,7 @@ def run_query_with_browser(
     keep_open: bool = False,
     engines: Optional[List[str]] = None,
     save_html_dir: Optional[str] = None,
+    user_data_dir: Optional[str] = None,
 ):
     print(BANNER)
 
@@ -403,7 +404,21 @@ def run_query_with_browser(
     if save_html_dir:
         os.makedirs(save_html_dir, exist_ok=True)
 
-    browser = ChromiumPage()
+    co = ChromiumOptions()
+    co.set_argument('--no-first-run')
+    co.set_argument('--disable-blink-features=AutomationControlled')
+    co.set_argument('--start-maximized')
+
+    if user_data_dir:
+        co.set_user_data_path(user_data_dir)
+
+    if user_agent:
+        co.set_user_agent(user_agent)
+
+    if headless:
+        co.headless()
+
+    browser = ChromiumPage(co)
     solver = RecaptchaSolver(browser)
 
     # 🔴 NUEVA ESTRUCTURA: Una pestaña por cada combinación (engine, query)
@@ -820,7 +835,11 @@ def parse_args():
     parser.add_argument("--headless", action="store_true", help="Run Chromium in headless mode (if supported)")
     parser.add_argument(
         "--user-agent",
-        help="Custom User-Agent for Chromium (you may need to set it via DrissionPage options manually)",
+        help="Custom User-Agent string for Chromium",
+    )
+    parser.add_argument(
+        "--user-data-dir",
+        help="Path to a Chromium user data directory (reuses cookies/history to avoid bot detection)",
     )
 
     return parser.parse_args()
@@ -991,6 +1010,7 @@ def main():
         engines=engines,
         keep_open=True,
         save_html_dir=args.save_html_dir,
+        user_data_dir=args.user_data_dir,
     )
 
     input(
