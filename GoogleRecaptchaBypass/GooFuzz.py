@@ -429,213 +429,150 @@ def run_query_with_browser(
     seen_links = set()
     urls_by_engine = {eng: [] for eng in engines}
 
-    try:
-        # ---------- CREATE TABS FOR ALL QUERIES ----------
-        print(f"\n[+] Creating tabs for {len(engines)} engine(s) × {len(queries)} query/queries...")
-        
-        tab_index = 0
-        for engine in engines:
-            for label, query in queries:
-                if tab_index == 0:
-                    # Use the first tab (main browser page)
-                    tab_obj = browser
-                else:
-                    # Create new tab
-                    tab_obj = browser.new_tab()
-                    try:
-                        tab_obj.set.activate()
-                    except Exception:
-                        pass
-                
-                query_tabs[(engine, label)] = {
-                    'tab': tab_obj,
-                    'query': query,
-                    'active': True  # Flag to skip if user chooses to stop this query
-                }
-                tab_index += 1
-                print(f"    [Tab {tab_index}] {engine} - {label}")
-        
-        print(f"[+] Total tabs created: {len(query_tabs)}\n")
+    anchor_tab_id = browser.tab_ids[0]
 
-        # ---------- PROCESS ALL QUERIES SEQUENTIALLY ----------
-        for page_idx in range(pages):
-            print(f"\n{'='*70}")
-            print(f"  PROCESSING PAGE {page_idx + 1}/{pages}")
-            print(f"{'='*70}\n")
-            
-            # 🔴 Iterate through tabs ONE BY ONE with delay between them
-            for tab_num, ((engine, label), tab_info) in enumerate(query_tabs.items(), 1):
-                # Skip if this query was deactivated
-                if not tab_info['active']:
-                    print(f"[Tab {tab_num}] Skipped (deactivated): [{engine}] {label}")
-                    continue
-                
-                page_obj = tab_info['tab']
-                query = tab_info['query']
-                
-                print(f"\n{'─'*70}")
-                print(f"[Tab {tab_num}/{len(query_tabs)}] Engine: {engine} | Query: {label} | Page: {page_idx + 1}")
-                print(f"{'─'*70}")
-                
-                # Build URL
-                url = build_search_url_for_engine(engine, query, page_idx)
-                print(f"[+] Opening: {url}")
-                
-                # Activate this tab before loading
-                try:
-                    page_obj.set.activate()
-                    time.sleep(0.5)  # Small delay to ensure tab activation
-                except Exception:
-                    pass
-                
-                page_obj.get(url)
-                
-                # Wait for page load
-                max_wait = 30
-                wait_start = time.time()
-                
-                while True:
-                    elapsed = time.time() - wait_start
-                    if elapsed > max_wait:
-                        print(f"[!] Timeout ({max_wait}s)")
-                        break
-                    
-                    try:
-                        test_elements = page_obj.eles("css: body")
-                        if test_elements:
-                            print(f"[+] Loaded in {elapsed:.1f}s")
+    def wait_for_anchor_only(br):
+        extra = [t for t in br.tab_ids if t != anchor_tab_id]
+        if not extra:
+            return
+        print(f"\n[!] {len(extra)} extra tab(s) open. Close them to continue...")
+        while True:
+            extra = [t for t in br.tab_ids if t != anchor_tab_id]
+            if not extra:
+                break
+            time.sleep(1)
+        print("[+] Only anchor tab remains, resuming.\n")
+
+    def write_new_links(new_links, engine):
+        engine_filename = f"url_{engine}.txt"
+        try:
+            with open(engine_filename, "a", encoding="utf-8") as f:
+                for link in new_links:
+                    f.write(link + "\n")
+            print(f"[+] Appended to: {engine_filename}")
+        except Exception as e:
+            print(f"[!] Write error: {e}", file=sys.stderr)
+
+        if output_file:
+            try:
+                with open(output_file, "a", encoding="utf-8") as f:
+                    for link in new_links:
+                        f.write(link + "\n")
+                print(f"[+] Appended to: {output_file}")
+            except Exception as e:
+                print(f"[!] Write error: {e}", file=sys.stderr)
+
+    try:
+        for query_idx, (label, query) in enumerate(queries):
+            for page_idx in range(pages):
+                print(f"\n{'='*70}")
+                print(f"  QUERY {query_idx + 1}/{len(queries)}: {label} | PAGE {page_idx + 1}/{pages}")
+                print(f"{'='*70}")
+
+                wait_for_anchor_only(browser)
+
+                # Open one tab per engine
+                engine_tab_map = {}
+                for eng_idx, engine in enumerate(engines):
+                    url = build_search_url_for_engine(engine, query, page_idx)
+                    tab = browser.new_tab(url)
+                    engine_tab_map[engine] = tab
+                    print(f"[+] Opened {engine} tab: {url}")
+                    time.sleep(0.5)
+
+                # Wait for all tabs to load
+                for engine, tab in engine_tab_map.items():
+                    max_wait = 30
+                    wait_start = time.time()
+                    while True:
+                        elapsed = time.time() - wait_start
+                        if elapsed > max_wait:
+                            print(f"[!] {engine}: timeout ({max_wait}s)")
                             break
+                        try:
+                            if tab.eles("css: body"):
+                                print(f"[+] {engine}: loaded in {elapsed:.1f}s")
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(0.5)
+
+                # Try to solve captchas on each tab
+                for engine, tab in engine_tab_map.items():
+                    try:
+                        tab.set.activate()
                     except Exception:
                         pass
-                    
-                    time.sleep(0.5)
-                
-                # Resolve CAPTCHA
-                maybe_solve_recaptcha(page_obj, solver)
+                    maybe_solve_recaptcha(tab, solver)
+
                 time.sleep(2)
-                
-                # Save HTML if requested
-                if save_html_dir:
-                    label_safe = sanitize_for_filename(str(label))
-                    query_safe = sanitize_for_filename(query)
-                    filename = f"{engine}_{label_safe}_p{page_idx + 1}_{query_safe}.html"
-                    filepath = os.path.join(save_html_dir, filename)
-                    try:
-                        with open(filepath, "w", encoding="utf-8") as f:
-                            f.write(page_obj.html)
-                        print(f"[+] Saved HTML: {filename}")
-                    except Exception as e:
-                        print(f"[!] Failed to save HTML: {e}", file=sys.stderr)
-                
-                # Determine filetype
-                filetype = (
-                    label
-                    if label and "." not in label and label not in ("subdomains", query)
-                    else None
-                )
-                
-                # Extract links with retries
-                extraction_attempts = 0
-                max_attempts = 1
-                links = []
-                
-                while extraction_attempts < max_attempts:
-                    extraction_attempts += 1
-                    print(f"[+] Extraction attempt {extraction_attempts}/{max_attempts}...")
-                    
+
+                # Extract links from each tab
+                for engine, tab in engine_tab_map.items():
+                    print(f"\n{'─'*50}")
+                    print(f"  Extracting from {engine}")
+                    print(f"{'─'*50}")
+
+                    if save_html_dir:
+                        label_safe = sanitize_for_filename(str(label))
+                        query_safe = sanitize_for_filename(query)
+                        filename = f"{engine}_{label_safe}_p{page_idx + 1}_{query_safe}.html"
+                        filepath = os.path.join(save_html_dir, filename)
+                        try:
+                            with open(filepath, "w", encoding="utf-8") as f:
+                                f.write(tab.html)
+                            print(f"[+] Saved HTML: {filename}")
+                        except Exception as e:
+                            print(f"[!] Failed to save HTML: {e}", file=sys.stderr)
+
+                    filetype = (
+                        label
+                        if label and "." not in label and label not in ("subdomains", query)
+                        else None
+                    )
+
                     links = extract_links_from_results(
-                        page=page_obj,
+                        page=tab,
                         target=target,
                         filetype=filetype,
                         engine=engine,
                     )
-                    
-                    if links:
-                        print(f"[+] ✓ Found {len(links)} URLs")
-                        break
-                    else:
-                        print(f"[-] No links found")
-                        if extraction_attempts < max_attempts:
-                            print(f"    Waiting 3s...")
-                            time.sleep(3)
-                
-                # Handle no results
-                if not links:
-                    print("[-] ⚠️ No URLs after retries")
-                    print("    Possible reasons:")
-                    print("    - End of results")
-                    print("    - Unresolved CAPTCHA")
-                    print("    - HTML structure changed")
-                    
-                    # user_choice = input("    Continue this query on next pages? (y/N): ").strip().lower()
-                    # if user_choice != 'y' and user_choice != 's':
-                    #     print(f"    Deactivating query: [{engine}] {label}")
-                    #     tab_info['active'] = False
-                    #     continue
-                
-                # Process new links
-                new_links = [link for link in links if link not in seen_links]
-                
-                if new_links:
-                    print(f"\n[+] New links found: {len(new_links)}")
-                    for link in new_links:
-                        seen_links.add(link)
-                        print(f"    {link}")
-                        all_results_for_output.append(link)
-                        urls_by_engine[engine].append(link)
-                else:
-                    print(f"[-] No new links (all duplicates)")
-                
-                # Write to per-engine file in real-time
-                if new_links:
-                    engine_filename = f"url_{engine}.txt"
-                    try:
-                        with open(engine_filename, "a", encoding="utf-8") as f:
-                            for link in new_links:
-                                f.write(link + "\n")
-                        print(f"[+] Appended to: {engine_filename}")
-                    except Exception as e:
-                        print(f"[!] Write error: {e}", file=sys.stderr)
 
-                    if output_file:
-                        try:
-                            with open(output_file, "a", encoding="utf-8") as f:
-                                for link in new_links:
-                                    f.write(link + "\n")
-                            print(f"[+] Appended to: {output_file}")
-                        except Exception as e:
-                            print(f"[!] Write error: {e}", file=sys.stderr)
-                
-                # 🔴 DELAY BETWEEN TABS (not after the last tab of the last page)
-                is_last_tab = (tab_num == len(query_tabs))
-                is_last_page = (page_idx == pages - 1)
-                
-                if delay > 0 and not (is_last_tab and is_last_page):
-                    # Skip inactive tabs in the count
-                    remaining_active = sum(1 for t in list(query_tabs.values())[tab_num:] if t['active'])
-                    
-                    if is_last_tab:
-                        # Last tab of this page round
-                        print(f"\n[+] Page {page_idx + 1} completed. Waiting {delay}s before next page...")
+                    if not links:
+                        print(f"[-] {engine}: no URLs found")
+                        continue
+
+                    new_links = [link for link in links if link not in seen_links]
+
+                    if new_links:
+                        print(f"[+] {engine}: {len(new_links)} new link(s):")
+                        for link in new_links:
+                            seen_links.add(link)
+                            print(f"    {link}")
+                            all_results_for_output.append(link)
+                            urls_by_engine[engine].append(link)
+                        write_new_links(new_links, engine)
                     else:
-                        # Between tabs
-                        print(f"\n[+] Waiting {delay}s before next tab...")
-                    
-                    time.sleep(delay)
+                        print(f"[-] {engine}: no new links (all duplicates)")
+
+                print(f"\n[+] Round done. Close the {len(engines)} engine tab(s) to continue.")
+
+                if delay > 0:
+                    print(f"[+] (+ {delay}s delay after you close them)")
+
+        # Wait for last round's tabs before entering monitor
+        wait_for_anchor_only(browser)
+
+        if delay > 0:
+            time.sleep(delay)
 
         # ---------- Realtime monitoring phase ----------
         if keep_open:
             print("\n[+] Automatic phase finished.")
-            print("[+] Entering realtime monitoring mode.")
-            
-            # Convert query_tabs to engine_tabs for monitor function
-            engine_tabs_for_monitor = {}
-            for (engine, label), tab_info in query_tabs.items():
-                if engine not in engine_tabs_for_monitor:
-                    engine_tabs_for_monitor[engine] = tab_info['tab']
-            
+            print("[+] Entering realtime monitoring mode on anchor tab.")
+
             monitor_tabs_realtime(
-                engine_tabs=engine_tabs_for_monitor,
+                engine_tabs={engines[0]: browser},
                 target=target,
                 seen_links=seen_links,
                 all_results_for_output=all_results_for_output,
