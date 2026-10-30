@@ -114,12 +114,12 @@ class RecaptchaSolver:
         #    return
 
     def isSolved(self):
+        solved = False
         try:
             print("[INFO] Verificando si el CAPTCHA está resuelto...")
             time.sleep(5)
             solved = "style" in self.driver.ele(".recaptcha-checkbox-checkmark", timeout=1).attrs
             print("[INFO] CAPTCHA resuelto:", solved)
-            return solved
         except Exception as e:
             print("[ERROR] Error al verificar si el CAPTCHA está resuelto:", e)
-            return solved
+        return solved

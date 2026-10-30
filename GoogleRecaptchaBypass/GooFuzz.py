@@ -67,41 +67,6 @@ def build_exclusions(exclusions: str) -> str:
     return " ".join(exclude_targets)
 
 
-def build_inurl(dictionary: str) -> str:
-    """
-    Build the inurl: part using a dictionary.
-    Accepts:
-        - file with words (one per line)
-        - "word1,word2" list
-        - single word
-    GooFuzz uses an OR-like pattern; here we just do inurl:"w1|w2|w3"
-    """
-    if not dictionary:
-        return ""
-
-    words = []
-
-    if os.path.isfile(dictionary):
-        with open(dictionary, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                w = line.strip()
-                if w:
-                    words.append(w)
-    elif "," in dictionary:
-        for w in dictionary.split(","):
-            w = w.strip()
-            if w:
-                words.append(w)
-    else:
-        words.append(dictionary.strip())
-
-    if not words:
-        return ""
-
-    # e.g. inurl:"admin|config|backup"
-    return f'inurl:"{"|".join(words)}"'
-
-
 def build_contents(contents: str) -> str:
     """
     Build search for content inside files.
@@ -163,80 +128,6 @@ def build_extension_list(extension: str) -> list:
         exts.append(extension.strip().lstrip("."))
 
     return exts
-
-
-def build_query(
-    target: str,
-    mode: str,
-    extension: str = None,
-    dictionary: str = None,
-    subdomain: bool = False,
-    contents: str = None,
-    exclusions: str = None,
-) -> list:
-    """
-    Build one or multiple dork queries depending on the mode.
-    Returns a list of tuples: [(label, query), ...]
-        - label: what we’re looking for (e.g. "pdf", "subdomains", etc.)
-        - query: actual Google query string WITHOUT url-encoding.
-    """
-    queries = []
-    base_target = target.strip()
-
-    exclude_str = build_exclusions(exclusions)
-    inurl_str = build_inurl(dictionary) if dictionary else ""
-    contents_str = build_contents(contents) if contents else ""
-
-    # Dictionary mode: site:target inurl:"..."
-    if mode == "dictionary" and inurl_str:
-        q = f"site:{base_target} {inurl_str}"
-        if exclude_str:
-            q += " " + exclude_str
-        queries.append((dictionary, q))
-
-    # Extension mode: possibly multiple filetypes
-    elif mode == "extension":
-        exts = build_extension_list(extension)
-        for ext in exts:
-            q = f"site:{base_target} filetype:{ext}"
-            if contents_str:
-                q += " " + contents_str
-            if exclude_str:
-                q += " " + exclude_str
-            queries.append((ext, q))
-
-    # Subdomain mode
-    elif mode == "subdomain" and subdomain:
-        # e.g. site:*.target -site:www.target
-        q = f"site:*.{base_target} -site:www.{base_target}"
-        if exclude_str:
-            q += " " + exclude_str
-        queries.append(("subdomains", q))
-
-    # Contents mode: site:target infile:"..."
-    elif mode == "contents" and contents_str:
-        q = f"site:{base_target} {contents_str}"
-        if exclude_str:
-            q += " " + exclude_str
-        queries.append((contents, q))
-
-    return queries
-
-
-def build_search_url(query: str, page_num: int, filter_flag: bool = False) -> str:
-    """
-    Build the final Google search URL for a given query and page number.
-    filter_flag mimics the &filter=0 option of GooFuzz.
-    """
-    base_url = "https://www.google.com/search?q="
-    encoded_q = urllib.parse.quote_plus(query)
-    # page_num is 0,1,2,... but Google expects start=0,10,20,...
-    start = page_num * 10
-    url = f"{base_url}{encoded_q}&start={start}"
-    if not filter_flag:
-        # GooFuzz uses &filter=0 to avoid "similar results" filtering
-        url += "&filter=0"
-    return url
 
 
 def maybe_solve_recaptcha(page: ChromiumPage, solver: RecaptchaSolver):
@@ -525,11 +416,9 @@ def run_query_with_browser(
                         except Exception as e:
                             print(f"[!] Failed to save HTML: {e}", file=sys.stderr)
 
-                    filetype = (
-                        label
-                        if label and "." not in label and label not in ("subdomains", query)
-                        else None
-                    )
+                    # Only extension-mode queries carry a `filetype:` dork; derive it from the query.
+                    filetype_match = re.search(r"filetype:([^\s]+)", query)
+                    filetype = filetype_match.group(1) if filetype_match else None
 
                     links = extract_links_from_results(
                         page=tab,
@@ -566,20 +455,9 @@ def run_query_with_browser(
         if delay > 0:
             time.sleep(delay)
 
-        # ---------- Realtime monitoring phase ----------
         if keep_open:
             print("\n[+] Automatic phase finished.")
-            print("[+] Entering realtime monitoring mode on anchor tab.")
-
-            monitor_tabs_realtime(
-                engine_tabs={engines[0]: browser},
-                target=target,
-                seen_links=seen_links,
-                all_results_for_output=all_results_for_output,
-                urls_by_engine=urls_by_engine,
-                output_file=output_file,
-                poll_interval=5.0,
-            )
+            print("[*] keep_open=True -> browser stays open for manual browsing.")
 
     finally:
         if not keep_open:
@@ -764,6 +642,11 @@ def parse_args():
         "--user-data-dir",
         help="Path to a Chromium user data directory (reuses cookies/history to avoid bot detection)",
     )
+    parser.add_argument(
+        "--keep-open",
+        action="store_true",
+        help="Keep the browser open after the automated queries for manual browsing",
+    )
 
     return parser.parse_args()
 
@@ -820,78 +703,6 @@ def build_search_url_for_engine(engine: str, query: str, page_num: int, filter_f
     raise ValueError(f"Unsupported search engine: {engine}")
 
 
-def monitor_tabs_realtime(
-    engine_tabs: dict,
-    target: str,
-    seen_links: set,
-    all_results_for_output: list,
-    urls_by_engine: dict,
-    output_file: Optional[str] = None,
-    poll_interval: float = 2.0,
-):
-    """
-    Continuously monitor each engine tab and extract links in "near real-time".
-
-    - Periodically runs extract_links_from_results() on each tab.
-    - Prints and records only *new* links (using seen_links set).
-    - Appends new links to per-engine storage (urls_by_engine).
-    - Optionally can be extended to write to a global output file.
-
-    User can keep manually browsing (new searches, next pages, etc.).
-    Stop with Ctrl+C in the terminal.
-    """
-    print("\n[Realtime] Starting live monitoring of all tabs.")
-    print("          You can manually browse in the browser.")
-    print("          Press Ctrl+C in this terminal to stop realtime mode.\n")
-
-    try:
-        while True:
-            for engine, page_obj in engine_tabs.items():
-                try:
-                    links = extract_links_from_results(
-                        page=page_obj,
-                        target=target,
-                        filetype=None,   # In realtime mode, ignore filetype filter; adjust if needed
-                        engine=engine,
-                    )
-                except Exception as e:
-                    print(f"[!] Error extracting links from {engine} tab: {e}", file=sys.stderr)
-                    continue
-
-                new_links = [link for link in links if link not in seen_links]
-                if not new_links:
-                    continue
-
-                print(f"\n[+] {len(new_links)} new link(s) found in {engine} tab:")
-                for link in new_links:
-                    seen_links.add(link)
-                    all_results_for_output.append(link)
-                    urls_by_engine[engine].append(link)
-                    print(link)
-
-                if output_file:
-                    try:
-                        with open(output_file, "a", encoding="utf-8") as f:
-                            for link in new_links:
-                                f.write(link + "\n")
-                    except Exception as e:
-                        print(f"[!] Write error ({output_file}): {e}", file=sys.stderr)
-
-                engine_filename = f"url_{engine}.txt"
-                try:
-                    with open(engine_filename, "a", encoding="utf-8") as f:
-                        for link in new_links:
-                            f.write(link + "\n")
-                except Exception as e:
-                    print(f"[!] Write error ({engine_filename}): {e}", file=sys.stderr)
-
-            time.sleep(poll_interval)
-
-    except KeyboardInterrupt:
-        print("\n[Realtime] Monitoring stopped by user (Ctrl+C).")
-
-
-
 def main():
     args = parse_args()
 
@@ -944,16 +755,17 @@ def main():
         headless=args.headless,
         user_agent=args.user_agent,
         engines=engines,
-        keep_open=True,
+        keep_open=args.keep_open,
         save_html_dir=args.save_html_dir,
         user_data_dir=args.user_data_dir,
     )
 
-    input(
-        "\n[+] Finished automated queries.\n"
-        "You can now freely navigate in the browser window.\n"
-        "When you are done and want to close everything, press ENTER here...\n"
-    )
+    if args.keep_open:
+        input(
+            "\n[+] Finished automated queries.\n"
+            "You can now freely navigate in the browser window.\n"
+            "When you are done and want to close everything, press ENTER here...\n"
+        )
 
 
 if __name__ == "__main__":

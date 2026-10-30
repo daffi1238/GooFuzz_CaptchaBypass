@@ -9,6 +9,10 @@ start="&start="
 userAgent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
 version="1.2.5"
 
+# Absolute path to this script's directory, so the helper scripts below resolve
+# correctly no matter where GooFuzz is invoked from.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 ## Effects
 cBold="\e[1m"
 cNormal="\e[0m"
@@ -78,7 +82,7 @@ function notFound(){
 	
 	# Checking temporal ban from Google
 	while ! checkBan; do
-		sleep 10s
+		solveBan
 	done
 		
 	if [ -n "$extension" ]; then
@@ -110,20 +114,23 @@ function ctrl_c(){
 	exit 1
 }
 
-## Google ban check
+## Google ban check (detection only, no side effects)
 function checkBan(){
 	checkBanStatus=$(curl -s -H "$userAgent" -H "Cookie: $cookies" "${url}site:${target}${filter}${start}${pageNum}")
 
 	if [[ ${checkBanStatus} =~ "The document has moved" ]]; then
-		echo -e "\n${cBold}[!]${cNormal} Oops... Looks like Google has temporarily blocked your IP address."
-		echo "python3 ./GoogleRecaptchaBypass/bypass_googleCaptcha.py \"${url}site:${target}${filter}${start}${pageNum}\""
-		python3 ./GoogleRecaptchaBypass/bypass_googleCaptcha.py "${url}site:${target}${filter}${start}${pageNum}" "$userAgent"
-		read -p "Press enter to continue"
-		sleep 5m
 		return 1
 	fi
-	sleep 3s
 	return 0
+}
+
+## Solve a Google temporary ban via the browser bypass
+function solveBan(){
+	echo -e "\n${cBold}[!]${cNormal} Oops... Looks like Google has temporarily blocked your IP address."
+	echo "python3 \"${SCRIPT_DIR}/GoogleRecaptchaBypass/bypass_googleCaptcha.py\" \"${url}site:${target}${filter}${start}${pageNum}\""
+	python3 "${SCRIPT_DIR}/GoogleRecaptchaBypass/bypass_googleCaptcha.py" "${url}site:${target}${filter}${start}${pageNum}" "$userAgent"
+	read -p "Press enter to continue"
+	sleep 5m
 }
 
 ## URL Decode
@@ -134,18 +141,20 @@ function urlDecode(){
 ## Exclusions
 function exclusionsCheck(){
 	# Needs variables
+	local multi=0
 	excludeTargets="-site:"
 
 	# Checking file exist
 	if [ -f "$exclusions" ]; then
-		for exclusion in $(cat "$exclusions"); do
+		while IFS= read -r exclusion; do
+			[ -z "$exclusion" ] && continue
 			if [[ $multi -eq 1 ]]; then
 				exclusion="+-${exclusion}"
 			fi
 
 			excludeTargets="$excludeTargets${exclusion}"
 			multi=1 # On multi-liner
-		done
+		done < "$exclusions"
 
 	elif [[ "$exclusions" =~ "," ]]; then
 		excludeTargetsList=$(echo "$exclusions" | sed 's/,/ /g')
@@ -167,18 +176,20 @@ function exclusionsCheck(){
 ## Search the contents of files
 function contentsCheck(){
 	# Needs variables
+	local multi=0
 	inFile="infile:\""
 	
 	# Checking file exist
 	if [ -f "$contents" ]; then
-		for content in $(cat "$contents"); do
+		while IFS= read -r content; do
+			[ -z "$content" ] && continue
 			if [[ $multi -eq 1 ]]; then
 				content="+||+\"${content}\""
 			fi
 
 			inFile="$inFile${content}"
 			multi=1 # On multi-liner
-		done
+		done < "$contents"
 	elif [[ "$contents" =~ "," ]]; then
 		contentsList=$(echo "$contents" | sed 's/,/"+||+"/g')
 		inFile="$inFile${contentsList}\""
@@ -189,17 +200,20 @@ function contentsCheck(){
 
 ## Search words in URL
 function inurlCheck(){
+	# Needs variables
+	local multi=0
 
 	# Checking file exist
 	if [ -f "$dictionary" ]; then
-		for word in $(cat "$dictionary"); do
+		while IFS= read -r word; do
+			[ -z "$word" ] && continue
 			if [[ $multi -eq 1 ]]; then
 				word="+|+${word}"
 			fi
 
 			inUrl="$inUrl${word}"
 			multi=1 # On multi-liner
-		done
+		done < "$dictionary"
 	elif [[ "$dictionary" =~ "," ]]; then
 		dictionaryList=$(echo "$dictionary" | sed 's/,/+|+/g')
 		inUrl="$inUrl${dictionaryList}"
@@ -262,7 +276,7 @@ function requestRun(){
 		
 		# Request storage
 		echo "----------------------------"
-		echo -n $request
+		echo -n "$request"
 		requestStorage+="$request"
     		
 		# Pages Incremental
@@ -503,12 +517,14 @@ done
 ## Continue
 showBanner
 
-# Cookie generation and inclusion
-python3 GetCookie.py
+# Cookie generation and inclusion (only when missing or older than 1 hour)
+if [ ! -s cookies.txt ] || [ -n "$(find cookies.txt -mmin +60 -print -quit 2>/dev/null)" ]; then
+	python3 "${SCRIPT_DIR}/GoogleRecaptchaBypass/GetCookie.py"
+fi
 cookies=$(awk -F";" '{print $1}' cookies.txt | paste -sd'; ' -)
 
 
-if [ -n "$target" ] && [ -n "$dictionary" ] && [ -z "$subdomain" ] && [ -z "$extension" ] && [ -z "$contents"]; then
+if [ -n "$target" ] && [ -n "$dictionary" ] && [ -z "$subdomain" ] && [ -z "$extension" ] && [ -z "$contents" ]; then
 	dictionaryAttack
 	exit 1
 	

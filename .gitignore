@@ -1,0 +1,16 @@
+# Runtime secrets / session data (never commit)
+cookies.txt
+
+# Tool output / scraped artifacts
+url_*.txt
+shodan_root.txt
+subdomain_shodan.txt
+html_sessions/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
