@@ -3,35 +3,28 @@ from RecaptchaSolver import RecaptchaSolver
 import time
 import sys
 
-# URL de ejemplo o pasada por parámetro
+# URL y User-Agent pasados como parámetro
 url = sys.argv[1]
 user_agent = sys.argv[2]
 print(url)
 print(user_agent)
 
-# Configurar las opciones de Chromium para incluir el User-Agent
+# Configurar las opciones de Chromium
 options = ChromiumOptions()
-options.set_argument(f"user-agent={user_agent}")
+options.set_user_agent(user_agent)
 
-# Inicializar el driver y el resolver de reCAPTCHA con las opciones configuradas
+# Inicializar el driver y el resolver de reCAPTCHA
 driver = ChromiumPage(addr_or_opts=options)
 recaptchaSolver = RecaptchaSolver(driver)
 
-# Navegar a la URL y resolver el reCAPTCHA
+# Navegar a la URL e intentar resolver el CAPTCHA (best-effort)
 driver.get(url)
 t0 = time.time()
 recaptchaSolver.solveCaptcha()
 print(f"Time to solve the captcha: {time.time() - t0:.2f} seconds")
 
-# Hacer clic en el botón después de resolver el reCAPTCHA
-driver.ele("#recaptcha-verify-button").click()
+# Mantener el navegador abierto para resolución manual; se cierra con Enter.
+input("\n[!] Resuelve el CAPTCHA en el navegador y pulsa Enter para cerrar...\n")
 
-# Bucle para esperar hasta que el navegador Chromium se cierre
-print("Esperando a que el navegador Chromium se cierre...")
-
-time.sleep(5)
-
-print("El navegador Chromium ha sido cerrado. Continuando con el flujo del programa.")
-
-# Cerrar el driver para liberar recursos
 driver.close()
+print("Navegador cerrado.")

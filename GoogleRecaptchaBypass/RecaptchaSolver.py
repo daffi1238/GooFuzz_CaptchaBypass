@@ -1,6 +1,12 @@
-import os,urllib,random,pydub,speech_recognition,time
+import os
+import urllib
+import random
+import pydub
+import speech_recognition
+import time
 from DrissionPage.common import Keys
-from DrissionPage import ChromiumPage 
+from DrissionPage import ChromiumPage
+
 
 class RecaptchaSolver:
     def __init__(self, driver):
@@ -8,48 +14,53 @@ class RecaptchaSolver:
 
     def solveCaptcha(self):
         print("[INFO] Iniciando solución de CAPTCHA")
+
+        # Localizar el iframe del checkbox reCAPTCHA. Si no existe, no hay un
+        # captcha v2 estándar que podamos resolver de forma automática.
         try:
-            print("[INFO] Localizando iframe interno de reCAPTCHA...")
-            iframe_inner = self.driver("@title=reCAPTCHA")
-            print("[INFO] Iframe encontrado:", iframe_inner)
-        except Exception as e:
-            print("[ERROR] No se pudo localizar el iframe interno:", e)
+            iframe_inner = self.driver.ele("@title=reCAPTCHA", timeout=3)
+        except Exception:
+            iframe_inner = None
+
+        if not iframe_inner:
+            print("[INFO] No se detectó un reCAPTCHA v2 estándar; resuélvelo manualmente en el navegador.")
             return
 
         time.sleep(0.1)
-        
+
         try:
-            print("[INFO] Haciendo clic en el contenido del reCAPTCHA...")
+            print("[INFO] Haciendo clic en el checkbox del reCAPTCHA...")
             iframe_inner('.rc-anchor-content', timeout=1).click()
-        except Exception as e:
-            print("[ERROR] No se pudo hacer clic en el reCAPTCHA:", e)
+        except Exception:
+            print("[ERROR] No se pudo hacer clic en el checkbox del reCAPTCHA; resuélvelo manualmente.")
             return
-        
+
         try:
-            print("[INFO] Esperando que el iframe del reCAPTCHA sea visible...")
+            print("[INFO] Esperando a que aparezca el reto del reCAPTCHA...")
             self.driver.wait.ele_displayed("xpath://iframe[contains(@title, 'recaptcha')]", timeout=10)
-        except Exception as e:
-            print("[ERROR] El iframe no se hizo visible a tiempo:", e)
-            return
+        except Exception:
+            print("[INFO] No apareció un reto adicional (quizá ya quedó resuelto).")
 
         time.sleep(5)
         if self.isSolved():
             print("[INFO] CAPTCHA resuelto tras el primer clic.")
             return
-        
+
         try:
-            print("[INFO] Localizando nuevo iframe del reCAPTCHA...")
-            iframe = self.driver("xpath://iframe[contains(@title, 'recaptcha')]")
-            print("[INFO] Iframe encontrado:", iframe)
-        except Exception as e:
-            print("[ERROR] No se pudo localizar el nuevo iframe:", e)
+            print("[INFO] Localizando el iframe del reto...")
+            iframe = self.driver.ele("xpath://iframe[contains(@title, 'recaptcha')]", timeout=3)
+        except Exception:
+            iframe = None
+
+        if not iframe:
+            print("[INFO] No se encontró el iframe del reto; resuélvelo manualmente.")
             return
 
         try:
             print("[INFO] Haciendo clic en el botón de audio del reCAPTCHA...")
             iframe('#recaptcha-audio-button', timeout=1).click()
-        except Exception as e:
-            print("[ERROR] No se pudo hacer clic en el botón de audio:", e)
+        except Exception:
+            print("[ERROR] No se pudo acceder al botón de audio; resuélvelo manualmente.")
             return
 
         time.sleep(0.3)
@@ -57,9 +68,8 @@ class RecaptchaSolver:
         try:
             print("[INFO] Obteniendo la fuente del audio...")
             src = iframe('#audio-source').attrs['src']
-            print("[INFO] Fuente de audio obtenida:", src)
-        except Exception as e:
-            print("[ERROR] No se pudo obtener la fuente del audio:", e)
+        except Exception:
+            print("[ERROR] No se pudo obtener la fuente del audio; resuélvelo manualmente.")
             return
 
         try:
@@ -69,18 +79,16 @@ class RecaptchaSolver:
             path_to_wav = os.path.normpath(os.path.join(
                 (os.getenv("TEMP") if os.name == "nt" else "/tmp/") + str(random.randrange(1, 1000)) + ".wav"))
             urllib.request.urlretrieve(src, path_to_mp3)
-            print("[INFO] Archivo de audio descargado en:", path_to_mp3)
-        except Exception as e:
-            print("[ERROR] No se pudo descargar el archivo de audio:", e)
+        except Exception:
+            print("[ERROR] No se pudo descargar el archivo de audio; resuélvelo manualmente.")
             return
 
         try:
             print("[INFO] Convirtiendo el archivo MP3 a WAV...")
             sound = pydub.AudioSegment.from_mp3(path_to_mp3)
             sound.export(path_to_wav, format="wav")
-            print("[INFO] Archivo convertido a WAV:", path_to_wav)
-        except Exception as e:
-            print("[ERROR] No se pudo convertir el archivo de audio:", e)
+        except Exception:
+            print("[ERROR] No se pudo convertir el audio (¿falta ffmpeg?); resuélvelo manualmente.")
             return
 
         try:
@@ -91,8 +99,8 @@ class RecaptchaSolver:
                 audio = r.record(source)
             key = r.recognize_google(audio)
             print("[INFO] Texto reconocido:", key)
-        except Exception as e:
-            print("[ERROR] No se pudo reconocer el audio:", e)
+        except Exception:
+            print("[ERROR] No se pudo reconocer el audio; resuélvelo manualmente.")
             return
 
         try:
@@ -100,18 +108,11 @@ class RecaptchaSolver:
             iframe('#audio-response').input(key.lower())
             time.sleep(0.1)
             iframe('#audio-response').input(Keys.ENTER)
-        except Exception as e:
-            print("[ERROR] No se pudo ingresar el texto en el reCAPTCHA:", e)
+        except Exception:
+            print("[ERROR] No se pudo ingresar el texto; resuélvelo manualmente.")
             return
 
         time.sleep(0.4)
-
-        #if self.isSolved():
-        #    print("[INFO] CAPTCHA resuelto con éxito.")
-        #    return
-        #else:
-        #    print("[ERROR] Falló la solución del CAPTCHA.")
-        #    return
 
     def isSolved(self):
         solved = False
@@ -120,6 +121,6 @@ class RecaptchaSolver:
             time.sleep(5)
             solved = "style" in self.driver.ele(".recaptcha-checkbox-checkmark", timeout=1).attrs
             print("[INFO] CAPTCHA resuelto:", solved)
-        except Exception as e:
-            print("[ERROR] Error al verificar si el CAPTCHA está resuelto:", e)
+        except Exception:
+            print("[INFO] No se pudo verificar el estado del CAPTCHA.")
         return solved

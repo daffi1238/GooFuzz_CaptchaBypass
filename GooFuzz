@@ -129,7 +129,6 @@ function solveBan(){
 	echo -e "\n${cBold}[!]${cNormal} Oops... Looks like Google has temporarily blocked your IP address."
 	echo "python3 \"${SCRIPT_DIR}/GoogleRecaptchaBypass/bypass_googleCaptcha.py\" \"${url}site:${target}${filter}${start}${pageNum}\""
 	python3 "${SCRIPT_DIR}/GoogleRecaptchaBypass/bypass_googleCaptcha.py" "${url}site:${target}${filter}${start}${pageNum}" "$userAgent"
-	read -p "Press enter to continue"
 	sleep 5m
 }
 
